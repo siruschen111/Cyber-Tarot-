@@ -1,5 +1,5 @@
 # Cyber-Tarot-
-a little html game 
+A HTML GAME
 通过摄像头进行手势控制，进行答案之书的抽卡的小游戏，纯赛博算命
 不保准
 可以通过修改"const answers = [内容];"
