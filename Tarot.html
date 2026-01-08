@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>答案之书</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Zen+Dots&display=swap"
+        rel="stylesheet">
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Orbitron', sans-serif;
+            cursor: crosshair;
+        }
+
+        body::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 100;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: rgba(200, 200, 200, 0.8);
+            z-index: 101;
+            pointer-events: none;
+        }
+
+        .instruction {
+            font-size: 13px;
+            line-height: 1.8;
+            color: #888;
+            border-left: 2px solid #4ff;
+            padding-left: 15px;
+        }
+
+        .key {
+            color: #4ff;
+            font-weight: bold;
+        }
+
+        #status-text {
+            color: #ccc;
+            letter-spacing: 1px;
+            font-weight: bold;
+        }
+
+        #video-container {
+            position: absolute;
+            top: -1000px;
+            left: -1000px;
+            opacity: 0;
+        }
+
+        #loader {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #4ff;
+            font-size: 14px;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+</head>
+
+<body>
+
+    <div id="loader">System Initializing...</div>
+
+    <div id="ui-layer">
+        <div class="instruction">
+            <p><span class="key">✋ CAMERA</span> 张开手/握拳/挥手</p>
+            <p><span class="key">🖱 MOUSE</span> 左右滑动/左键点击/右键重置</p>
+            <p>STATUS: <span id="status-text">INITIATING...</span></p>
+        </div>
+    </div>
+
+    <div id="video-container"><video id="input-video"></video></div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+        import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+        const answers = [
+            "静 待 时 机", "绝 对 不 可", "放 手 一 搏", "命 定 之 数", "需 要 耐 心", "直 觉 指 引",
+            "重 建 秩 序", "虚 假 之 象", "贵 人 将 至", "保 持 缄 默", "即 刻 启 程", "再 试 一 次",
+            "稳 操 胜 券", "暂 缓 行 动", "先 停 一 停", "稍 作 等 待", "冷 静 三 秒", "拐 点 将 至",
+            "时 来 运 转", "出 现 转 机", "新 局 将 开", "一 定 实 现", "心 想 事 成", "必 将 如 愿",
+            "勇 敢 去 闯", "冒 险 值 得", "赌 一 把 吧", "相 信 直 觉", "听 听 内 心", "答 案 在 你",
+            "先 问 自 己", "寻 求 帮 手", "团 队 为 重", "借 力 成 事", "贵 人 可 找", "谨 防 陷 阱",
+            "小 心 为 上", "勿 轻 信 人", "先 观 其 变", "先 学 再 做", "深 耕 细 作", "厚 积 薄 发",
+            "打 磨 技 艺", "归 零 重 来", "换 个 角 度", "拆 了 重 构", "顺 其 自 然", "不 必 强 求",
+            "交 给 时 间", "随 缘 即 可", "立 刻 行 动", "马 上 去 做", "说 干 就 干", "趁 热 打 铁",
+            "再 撑 一 下", "继 续 前 行", "不 可 放 弃", "熬 过 去 了"
+        ];
+
+        const CONF = { cardCount: answers.length, cardSpacing: 3.2, chargeTimeNeed: 50 };
+        const input = { x: 0.5, y: 0.5, isPalmOpen: false, isDetected: false, vx: 0, isMouseDown: false, mouseRightClick: false };
+        let scrollTarget = 0, scrollCurrent = 0, pinchTimer = 0, explosionParticles, gameState = 'IDLE';
+        let lastX = 0.5, revealTime = 0;
+        const clock = new THREE.Clock();
+
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x020205, 0.035);
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 0, 11);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: false });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setClearColor(0x020205);
+        document.body.appendChild(renderer.domElement);
+
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.5, 0.4, 0.9);
+        composer.addPass(bloom);
+
+        const chargeRing = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.16, 64), new THREE.MeshBasicMaterial({ color: 0xff0044, transparent: true, opacity: 0, blending: THREE.AdditiveBlending }));
+        scene.add(chargeRing);
+
+        function initExplosion() {
+            const geo = new THREE.BufferGeometry();
+            const pos = new Float32Array(1500 * 3); const vel = new Float32Array(1500 * 3);
+            for (let i = 0; i < 1500; i++) {
+                const theta = Math.random() * Math.PI * 2, phi = Math.acos(Math.random() * 2 - 1), s = Math.random() * 0.15 + 0.02;
+                vel[i * 3] = s * Math.sin(phi) * Math.cos(theta); vel[i * 3 + 1] = s * Math.sin(phi) * Math.sin(theta); vel[i * 3 + 2] = s * Math.cos(phi);
+            }
+            geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+            geo.setAttribute('velocity', new THREE.BufferAttribute(vel, 3));
+            explosionParticles = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.04, color: 0xccccff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending }));
+            scene.add(explosionParticles);
+        }
+        initExplosion();
+
+        const cards = []; const cardGroup = new THREE.Group(); scene.add(cardGroup);
+        const finalTextMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 });
+        const finalTextPlane = new THREE.Mesh(new THREE.PlaneGeometry(4, 6), finalTextMat);
+        finalTextPlane.position.z = 8; finalTextPlane.visible = false; scene.add(finalTextPlane);
+
+        function createCardTexture(text, isFront) {
+            const cvs = document.createElement('canvas'); cvs.width = 512; cvs.height = 768; const ctx = cvs.getContext('2d');
+            ctx.fillStyle = isFront ? '#222' : '#151515'; ctx.fillRect(0, 0, 512, 768);
+            ctx.strokeStyle = isFront ? '#446688' : '#aa6644'; ctx.lineWidth = 10; ctx.strokeRect(20, 20, 472, 728);
+            if (isFront) {
+                ctx.fillStyle = "#ffffff"; ctx.font = "bold 60px 'Orbitron'"; ctx.textAlign = "center"; ctx.fillText(text.replace(/\s+/g, ''), 256, 384);
+            } else {
+                ctx.strokeStyle = "#aa5533"; ctx.lineWidth = 5; ctx.beginPath(); ctx.arc(256, 384, 140, 0, Math.PI * 2); ctx.stroke();
+                ctx.fillStyle = "#aa5533"; ctx.font = "80px serif"; ctx.textAlign = "center"; ctx.fillText("👁", 256, 390);
+            }
+            return new THREE.CanvasTexture(cvs);
+        }
+
+        answers.forEach((txt, i) => {
+            const g = new THREE.Group();
+            const front = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 3.6), new THREE.MeshBasicMaterial({ map: createCardTexture(txt, true), transparent: true }));
+            front.rotation.y = Math.PI; front.position.z = -0.01;
+            const back = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 3.6), new THREE.MeshBasicMaterial({ map: createCardTexture("", false), transparent: true }));
+            g.add(front, back); g.userData = { baseX: i * CONF.cardSpacing };
+            cardGroup.add(g); cards.push(g);
+        });
+
+        // 鼠标交互监听
+        window.addEventListener('mousemove', (e) => {
+            if (!input.isDetected) {
+                input.x = e.clientX / window.innerWidth;
+                input.y = e.clientY / window.innerHeight;
+                input.vx = (input.x - lastX);
+                lastX = input.x;
+                input.isPalmOpen = true; // 鼠标移动模拟张开手掌
+            }
+        });
+        window.addEventListener('mousedown', (e) => {
+            if (e.button === 0) input.isMouseDown = true;
+        });
+        window.addEventListener('mouseup', () => {
+            input.isMouseDown = false;
+        });
+        window.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); // 禁用右键菜单
+            input.mouseRightClick = true;
+        });
+
+        function updateLogic() {
+            const time = clock.getElapsedTime();
+            const statusEl = document.getElementById('status-text');
+
+            if (gameState === 'REVEALED') {
+                updateExplosionAnim();
+                const elapsed = Date.now() - revealTime;
+                if (elapsed > 3000) {
+                    statusEl.innerText = "SWIPE RIGHT OR RIGHT-CLICK TO CLEAR";
+                    statusEl.style.color = "#4ff";
+                    if (input.vx > 0.12 || input.mouseRightClick) {
+                        input.mouseRightClick = false;
+                        resetToIdle();
+                    }
+                } else {
+                    statusEl.innerText = `DESTINY REVEALED...`;
+                    statusEl.style.color = "#888";
+                }
+                return;
+            }
+
+            if (gameState === 'RESETTING') { updateExplosionAnim(); return; }
+
+            const speed = (input.x - 0.5) * 0.7;
+            // 摄像头优先，若未检测到摄像头则自动允许鼠标移动控制
+            if (input.isDetected ? input.isPalmOpen : true) {
+                scrollTarget -= speed;
+            } else {
+                const nearest = Math.round(-scrollTarget / CONF.cardSpacing);
+                scrollTarget += ((-nearest * CONF.cardSpacing) - scrollTarget) * 0.08;
+            }
+            scrollCurrent += (scrollTarget - scrollCurrent) * 0.1;
+
+            const totalW = CONF.cardCount * CONF.cardSpacing;
+            cards.forEach((c, idx) => {
+                let x = (c.userData.baseX + scrollCurrent) % totalW;
+                if (x > totalW / 2) x -= totalW; if (x < -totalW / 2) x += totalW;
+                c.position.set(x, Math.sin(time * 2 + idx) * 0.05 - 0.5, Math.exp(-Math.pow(x * 0.45, 2)) * 2);
+                c.rotation.y = -x * 0.2; c.scale.setScalar(1 + Math.exp(-Math.pow(x * 0.6, 2)) * 0.4);
+                const op = 1 - Math.min(Math.abs(x) / (CONF.cardSpacing * 2), 0.9);
+                c.children.forEach(m => m.material.opacity = op);
+            });
+
+            const closestIdx = Math.round(-scrollTarget / CONF.cardSpacing) % CONF.cardCount;
+            const realIdx = (closestIdx + CONF.cardCount) % CONF.cardCount;
+
+            // 交互判定逻辑：手部握拳 OR 鼠标左键长按
+            const isLocking = input.isDetected ? (!input.isPalmOpen) : input.isMouseDown;
+
+            if (input.isDetected || input.isMouseDown) {
+                if (isLocking && Math.abs(cards[realIdx].position.x) < 0.6) {
+                    pinchTimer++; gameState = 'CHARGING'; chargeRing.visible = true;
+                    const prog = pinchTimer / CONF.chargeTimeNeed;
+                    chargeRing.position.set(0, 0, 5);
+                    chargeRing.geometry.dispose();
+                    chargeRing.geometry = new THREE.RingGeometry(0.12, 0.16, 64, 1, Math.PI / 2, prog * Math.PI * 2);
+                    statusEl.innerText = `LOCKING... ${Math.floor(prog * 100)}%`;
+                    statusEl.style.color = "#ff3333";
+                    if (pinchTimer >= CONF.chargeTimeNeed) revealAnswer(cards[realIdx]);
+                } else {
+                    pinchTimer = 0; chargeRing.visible = false;
+                    statusEl.innerText = input.isDetected ? (input.isPalmOpen ? "NAVIGATING" : "READY") : "MOUSE MODE: ACTIVE";
+                    statusEl.style.color = "#ccc";
+                }
+            }
+        }
+
+        function revealAnswer(target) {
+            gameState = 'REVEALED'; revealTime = Date.now();
+            gsap.to(target.position, { x: 0, y: 0, z: 7, duration: 1.2, ease: "power3.out" });
+            gsap.to(target.rotation, { y: Math.PI, duration: 1, ease: "back.out" });
+            cards.forEach(c => { if (c !== target) gsap.to(c.scale, { x: 0, y: 0, z: 0, duration: 0.5 }); });
+            setTimeout(() => {
+                finalTextMat.map = target.children[0].material.map;
+                finalTextPlane.visible = true;
+                explosionParticles.position.copy(target.position);
+                explosionParticles.userData.active = true;
+                gsap.to(explosionParticles.material, { opacity: 0.5, duration: 0.1 });
+                gsap.to(explosionParticles.material, { opacity: 0, duration: 2.5, delay: 0.2 });
+                gsap.to(target.children[0].material, { opacity: 0, duration: 0.5 });
+                gsap.to(finalTextMat, { opacity: 1, duration: 0.5 });
+            }, 800);
+        }
+
+        function resetToIdle() {
+            gameState = 'RESETTING';
+            gsap.to(explosionParticles.material, { opacity: 0, duration: 0.2 });
+            gsap.to(finalTextPlane.position, { x: 12, duration: 0.4, ease: "power2.in" });
+            gsap.to(finalTextMat, {
+                opacity: 0,
+                duration: 0.3,
+                onComplete: () => {
+                    explosionParticles.userData.active = false;
+                    const pos = explosionParticles.geometry.attributes.position.array;
+                    for (let i = 0; i < pos.length; i++) pos[i] = 0;
+                    explosionParticles.geometry.attributes.position.needsUpdate = true;
+                    finalTextPlane.visible = false;
+                }
+            });
+
+            setTimeout(() => {
+                finalTextPlane.position.set(0, 0, 8);
+                cards.forEach((c, i) => {
+                    c.scale.set(0, 0, 0);
+                    c.position.y = -10;
+                    gsap.to(c.scale, { x: 1, y: 1, z: 1, duration: 0.6, delay: i * 0.01, ease: "back.out(1.2)" });
+                    c.children.forEach(m => m.material.opacity = 1);
+                });
+                setTimeout(() => {
+                    gameState = 'IDLE';
+                    pinchTimer = 0;
+                    input.mouseRightClick = false;
+                }, 700);
+            }, 500);
+        }
+
+        function updateExplosionAnim() {
+            if (!explosionParticles.userData.active) return;
+            const p = explosionParticles.geometry.attributes.position.array;
+            const v = explosionParticles.geometry.attributes.velocity.array;
+            for (let i = 0; i < 1500; i++) { p[i * 3] += v[i * 3]; p[i * 3 + 1] += v[i * 3 + 1]; p[i * 3 + 2] += v[i * 3 + 2]; v[i * 3] *= 0.96; v[i * 3 + 1] *= 0.96; v[i * 3 + 2] *= 0.96; }
+            explosionParticles.geometry.attributes.position.needsUpdate = true;
+        }
+
+        const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5 });
+        hands.onResults(res => {
+            input.isDetected = res.multiHandLandmarks && res.multiHandLandmarks.length > 0;
+            if (input.isDetected) {
+                const lm = res.multiHandLandmarks[0];
+                const curX = 1 - lm[8].x; input.vx = curX - lastX; lastX = curX;
+                input.x += (curX - input.x) * 0.5;
+                let ext = 0;[8, 12, 16, 20].forEach(i => { if (lm[i].y < lm[i - 2].y) ext++; });
+                input.isPalmOpen = ext >= 1;
+            }
+        });
+        new Camera(document.getElementById('input-video'), { onFrame: async () => { await hands.send({ image: document.getElementById('input-video') }); }, width: 320, height: 240 }).start();
+
+        function animate() { requestAnimationFrame(animate); updateLogic(); composer.render(); }
+        document.getElementById('loader').style.display = 'none'; animate();
+    </script>
+</body>
+
+</html>
